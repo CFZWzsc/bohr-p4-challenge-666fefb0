@@ -1,97 +1,254 @@
 ---
-name: research-literature-classifier
-description: Use when a research-library case supplies a batch of papers, preprints, supplements, or datasets and asks to classify, tag, rename, deduplicate, or separate versions; run scripts/run_skill.py for a deterministic metadata-backed classification manifest with result.json.
+name: research-library-organizer
+description: 将期刊论文、预印本、学位论文、补充材料与扫描件按证据分类到目录层级，补全可证实元数据，统一重命名，检测重复与版本，先 dry-run 并可回滚。
 ---
 
-# 文献与资料自动分类
+# 科研资料批量整理
 
-## 用途与适用条件
+## 用途
 
-在批量文献整理任务中使用：按文献类型/主题归入目录、生成可核对标签、按模板重命名、用内容哈希去重、区分预印本与正式版。输入为 `/input/case.json`、可选 `/input/task.md` 与真实文件批次。
+把一个杂乱的科研资料目录整理成可复核的图书馆式结构：盘点文件、按证据分类、补全可证实元数据、统一重命名、识别重复下载与“预印本/正式版/修订版”关系，并给出可逆的执行清单。默认 dry-run，绝不静默覆盖或删除。
 
-不适用：单篇精读、翻译、综述写作、文献检索发现；也不对缺失的作者/年份/DOI 做推测填充。
+## 适用条件
 
-## 输入
+- 输入是目录或 `case.json`，内含 PDF、DOCX、TXT、HTML、图片扫描件等资料。
+- 需要批量分类、补元数据、统一命名、去重、区分预印本与正式版。
+- 允许“未知就留空”，不要求补全所有字段。
+- 运行环境可执行 Python 3（仅标准库），不需要联网。
 
-- `case.json`：`case_id`、`output_contract`；可选 `naming_template`（默认 `{author}-{year}-{title}`）与 `taxonomy`（类别列表）。
-- 材料路径：`input_dir`、`materials`、`files`、`path` 等；缺失时回退 `/input`。
-- 输出：`/app/output/result.json`，工作区 `/app/work`。
+## 不适用场景
 
-## 处理流程（对应评分维度）
+- 需要联网抓取 DOI/Crossref/PubMed 元数据（本 skill 明确不联网）。
+- 需要 OCR 扫描件文字（本 skill 只识别“无文本层”，不生成 OCR 文本）。
+- 需要解析加密 PDF、损坏压缩包或专有格式的正文。
+- 需要删除文件、覆盖同名文件、做法律意义上的版本归档。
+- 需要改动 `case.json` 或输入 sidecar 的语义内容。
 
-1. **盘点与哈希（任务完成度）**：递归枚举文件，记录相对路径、字节、SHA-256、可读性；跳过目录与不可读文件并留痕。
-2. **元数据抽取（结果正确性）**：DOI 用 `10.<4-9位>/...` 正则从文件名与文本头部抽取；年份取 1900–2099；作者仅在文件名符合 `姓-年份-...` 模式时抽取；标题来自文件名主干或文本首行。每个字段标记 `source`：`filename`、`text` 或 `null`，**缺失一律 `null`，不编造**。
-3. **类型分类（结果完整性）**：先按文件名/文本关键词判定 `preprint`、`supplement`、`thesis`、`conference`、`dataset`、`review`、`article`、`unclassified`，无证据时归为 `unclassified` 并给出 `basis`。
-4. **标签（质量）**：从标题与文本头部取词，去除停用词与纯数字，按词频与长度选最多 5 个标签，全部带命中依据；不做同义词臆测。
-5. **重命名（可复核性）**：按模板生成 `author-year-title`，字段缺失降级为 `anon`/`nd`，标题截断 80 字符并清理非法字符，末尾附加 8 位内容哈希前缀防冲突；输出 `proposed_name` 与 `rename_reason`，不实际改名。
-6. **去重与版本（正确性）**：SHA-256 相同为重复；文件名主干归一后同组但哈希不同为版本组，保留全部成员并标出当前版本。
-7. **失败与恢复（可靠体验）**：不可读、加密、空文件、无文本层分别进入 `skipped`，不静默跳过。
+## 输入形态
+
+```
+/input/
+  case.json                     # 可选，推荐；提供 case_id、命名模板、taxonomy、output_contract
+  task.md                       # 可选，任务说明，不计入资料清单
+  <任意子目录>/
+    paper.pdf
+    paper.pdf.meta.json         # 可选 sidecar；也支持 <stem>.meta.json / .metadata.json / .sidecar.json / <stem>.json
+    ...
+```
+
+`--input` 可以是目录，也可以直接指向 `case.json`。若 `case.json` 缺失或损坏，仍然盘点目录中的真实文件，并在 `errors`/`uncertainty` 中如实说明。
+
+## 调用方式
+
+在 skill 安装目录 `/skills/weekly-skill` 下执行（先 dry-run）：
+
+```bash
+python /skills/weekly-skill/scripts/sk_entry.py \
+  --input /input \
+  --work /app/work \
+  --out /app/output
+```
+
+确认计划后，只有获得明确授权才执行：
+
+```bash
+python /skills/weekly-skill/scripts/sk_entry.py \
+  --input /input \
+  --work /app/work \
+  --out /app/output \
+  --apply
+```
+
+`run_skill.py` 是永不崩溃的薄封装，参数完全相同：
+
+```bash
+python /skills/weekly-skill/scripts/run_skill.py --input /input --work /app/work --out /app/output
+```
+
+本地演示：
+
+```bash
+python scripts/sk_entry.py \
+  --input examples/demo-case \
+  --work /app/work \
+  --out /app/output
+```
+
+- `--input` 默认 `/input`；`--work` 默认 `/app/work`；`--out` 默认 `/app/output`。
+- `--out` 可以是目录，也可以是 `.../result.json` 路径。
+- `--apply` 默认关闭；不加即 dry-run，输入目录不会被修改。
+- 两个脚本都以退出码 0 结束，包括空输入、损坏输入和内部异常；异常会写进 `result.json` 的 `status` 与 `errors`。
+
+## 分类层级与判定规则
+
+默认层级（`assets/policy.json` 可覆盖）：
+
+```
+library/<document_type>/<year>/
+library/archive/duplicates/
+library/archive/versions/
+```
+
+- `document_type`：`journal_article`、`review`、`preprint`、`conference_paper`、`thesis`、`supplement`、`dataset`、`scan`、`unclassified`。
+- `year` 取可证实年份；缺失时用 `unknown-year`，不猜。
+- 重复文件进入 `archive/duplicates`；非保留版本进入 `archive/versions`，均保留原内容。
+
+判定采用“证据加权、优先级确定”的规则，每条分类都写入 `classifications[].evidence`：
+
+1. **权威声明**（权重 100）：`sidecar` 或 `case.json` 的 `type`/`document_type`/`kind`。
+2. **原文文档类型标签**（85）：正文中的 `Document Type:` / `类型:`。
+3. **文件名或标题标记**（52–68）：如 `preprint`、`supplement`、`thesis`、`conference`、`dataset`、`review`。
+4. **预印本 DOI/站点**（55–62）：`10.1101/`、`10.21203/`、`arXiv`、`bioRxiv`、`medRxiv`、`SSRN` 等。
+5. **正文标记**（42–54）：仅用于 thesis/conference/preprint/dataset；`supplement`/`review` 不因正文里出现 “supplementary bibliography”“peer reviewed” 等词而误判。
+6. **结构特征**（24–30）：`abstract` + `references` → 期刊论文；`supervisor`/`degree`/`chapter` → 学位论文。
+7. **无文本层**（36）：有效 PDF/图片且无可提取文字 → `scan`。
+8. **扩展名兜底**（10）：PDF/DOC/DOCX 无更强证据时暂列 `journal_article`，并标为低置信度。
+9. **提取失败**：损坏/加密导致无法提取 → `unclassified`，不冒充 `scan`。
+
+`taxonomy` 若在 `case.json` 中给出，分类记录会同时给出映射后的 `category`，目录仍使用稳定的 `document_type` 层级。
+
+## 元数据优先级与“未知保持未知”
+
+逐字段按以下顺序取第一个非空值：
+
+1. `sidecar`（`<file>.meta.json` 等），置信度 high；
+2. `case.json` 的 `metadata` / `documents` / `files_metadata`，high；
+3. 原文前几页可提取文本中的显式标签（`Title:`、`Authors:`、`Journal:`、`Year:`、`DOI:`），medium；
+4. 文件名线索（作者-年份-标题、DOI），low。
+
+规则：
+
+- 没找到就是 `null`，并写入 `metadata[].unknown_fields` 与顶层 `uncertainty`。
+- 不从 DOI 前缀臆测期刊，不从文件名臆测作者全名，不补造 DOI。
+- `authors` 只接受 sidecar/case.json 的显式列表或原文 `Authors:` 标签；文件名只提供低置信度单作者线索。
+- `provenance` 逐字段记录来源与置信度。
+- 中文乱码会尝试 `utf-8`、`gb18030`、`big5` 等解码，仍不可读时如实标注，不强行编造。
+
+## 重命名模板
+
+默认模板：`{first_author}-{year}-{title}`，可在 `case.json` 的 `naming_template` 覆盖。
+
+支持的占位符：`{first_author}`、`{author}`、`{year}`、`{title}`、`{journal}`、`{doi}`、`{type}`、`{document_type}`、`{ext}`。
+
+- 未知作者 → `anon`；未知年份 → `nd`；未知标题 → `untitled`；未知期刊 → `unknown-journal`；未知 DOI → `no-doi`。
+- 组件会做 Unicode NFC、非法字符替换、空白转连字符、Windows 保留名规避、字节长度截断。
+- 扩展名保留。
+- 目标重名或目标已存在且内容不同 → 追加 `__<sha256前8位>`，绝不覆盖；冲突写入 `conflicts`。
+- 归档副本追加 `__dup-<hash>`，非保留版本追加 `__<variant>-<hash>`。
+- 已处于目标路径的文件标为 `already_in_place`，重复执行不会再次移动。
+
+## 重复与版本判定规则
+
+**重复**：完整文件 SHA-256 相同（`sha256_scope=full`）即同一组。
+
+- keeper 优先：正式类型、非 archive 路径、非 “copy/副本/(1)” 名称、带 sidecar、路径更短、字典序更小。
+- 其余成员进入 `archive/duplicates/`，只移动，不删除。
+- 哈希为 partial 的文件不参与重复判定。
+
+**版本**：
+
+- 按相同 DOI 分组；再按“规范化标题 + 第一作者 + 年份”分组；重叠组合并。
+- 变体：`preprint`、`formal`、`revision`、`supplement`、`other`。
+- 同时存在 preprint 与 formal/revision → `preprint_vs_formal`；存在 revision 标记 → `revision`；否则 `same_work`。
+- keeper 优先正式版，其次修订版，再预印本；其余进入 `archive/versions/`。
+- 分组键、成员、关系、keeper 全部写入 `versions[]`，便于人工复核；这是启发式，`uncertainty` 会明示。
+
+## 可逆性
+
+- 每次运行都在 `--work` 下写 `manifest.json`（盘点、分类、元数据、计划、证据）和 `rollback.json`。
+- `result.json` 顶层也包含 `rollback_plan`：`moves`（目标→原路径）、`sidecar_moves`、`created_dirs`。
+- `--apply` 分两阶段：先把源文件移到 `work/staging`，再移到目标；中途失败会尽量移回原路径，并写入 `applied.failures`。
+- 只创建目录、移动文件、移动 sidecar；从不删除内容文件。
+- 回滚时按 `rollback_plan.moves` / `sidecar_moves` 反向移动，再删除 `created_dirs` 中已空的目录。
+- 重复执行 `--apply` 是幂等的：第二次运行应为 `applied.status = "noop"`、`moves = 0`。
+
+## 先 dry-run
+
+默认就是 dry-run：
+
+- 不建目录、不移动、不改名、不写输入目录。
+- 仍会计算哈希、读取文本、生成完整计划与 `rollback_plan`（状态 `planned`）。
+- 自检应确认输入文件的 SHA-256 与 mtime 在 dry-run 前后完全一致。
+
+## 异常处理
+
+| 情况 | 行为 |
+|---|---|
+| 损坏/截断 PDF | `text_status=error`，类型 `unclassified`，`skipped` 记录 `text_extraction_error`，不中断 |
+| 加密 PDF | `text_status=encrypted`，不尝试破解，标 `unclassified` |
+| 扫描件/图片无文本层 | 类型 `scan`，`skipped` 记录 `text_extraction_no_text`，仍可按文件名/年份生成低置信度命名 |
+| 零字节文件 | `skipped` 记录 `text_extraction_empty`，`unclassified` |
+| 同名不同源 | 目标冲突 → 追加哈希后缀，原文件不动，写 `conflicts` |
+| 目标已存在同内容 | 标 `already_present`，源文件保留，不覆盖 |
+| 权限不足 | 盘点中保留记录，`readable=false`，`skipped` 记录 `permission_denied` |
+| 超大文件 | 超过 `max_file_bytes` 时哈希标 `partial`，不参与重复/版本判定 |
+| 符号链接 | 不跟随，`skipped` 记录 `symlink_skipped` |
+| 字符/路径限制 | 非法字符替换、保留名规避、按 UTF-8 字节截断、超长标题截断 |
+| 中文乱码 | 多编码尝试并选最优；仍异常时在文本详情中标注 |
+| case.json 缺失/损坏 | 继续处理目录，`status=partial`，`errors` 记录原因 |
+| 空目录 | `status=insufficient_input`，退出码 0，结果结构完整 |
 
 ## 输出契约
 
-| 字段 | 含义 |
-|-|-|
-| `case_id` | 与输入一致 |
-| `output_contract` 各字段 | 命中别名时填真实结果，否则 `null` + `contract_notes` |
-| `status` | `success` / `partial` / `insufficient_input` / `failed` |
-| `result` | `assignments`、`tags`、`proposed_names`、`duplicates`、`version_groups`、`unresolved` |
-| `evidence` | 哈希、字段来源、规则版本 |
-| `uncertainty` | 缺失元数据、启发式分类 |
-| `errors` / `stats` | 真实错误与计数 |
+`result.json` 始终包含：
 
-## 异常处理表
+- `case_id`、`status`、`mode`；
+- `inventory`、`classifications`、`metadata`、`renames`、`duplicates`、`versions`、`conflicts`、`skipped`、`plan_actions`、`applied`、`rollback_plan`、`evidence`、`uncertainty`、`run_log`、`errors`、`summary`、`state`；
+- 别名：`files`/`items` → `inventory`；`categories`/`labels` → `classifications`；`moves` → `renames`；`dupes` → `duplicates`；`skips` → `skipped`；
+- 额外：`tags`、`directories`、`auxiliary`、`metadata_index`、`contract_coverage`、`contract_extras`。
 
-| 情况 | 处置 | 状态 |
-|-|-|-|
-| case.json 缺失/非法 | 空结果 + 错误 | `failed` |
-| 无材料 | 空清单并说明 | `insufficient_input` |
-| 元数据缺失 | 字段 `null`，`unresolved` 记录 | `partial` |
-| 同名不同哈希 | 归入版本组，不覆盖 | `success` |
-| 同哈希不同名 | 归入重复组，全部保留 | `success` |
-| 文件不可读/加密 | `skipped` 记录原因 | `partial` |
-| 分类无证据 | `unclassified` + `basis=no_evidence` | `partial` |
+`case.json` 的 `output_contract` 无论写成对象、字符串列表还是 `[{name: ...}]`，每个键都会出现在结果中：
 
-## 限制
+- 已知键按直接/别名映射；
+- 名称相近的键按 token 模糊映射；
+- 完全未知的键写入一个非空 marker 对象，并在 `contract_extras` 说明“无生产者”。
 
-- 不做 PDF 正文全文解析与作者消歧；作者、期刊、卷期常为 `null`。
-- 标签是词频启发式，不是受控词表映射；跨语言同义词不合并。
-- 不执行真实改名/移动，只输出可复核计划。
+## 自检清单
 
-## 最小调用示例（示例，非官方案例结果）
+- [ ] `python -m py_compile scripts/sk_entry.py scripts/run_skill.py` 通过。
+- [ ] demo dry-run 退出码 0，`result.json` 存在且含全部 `output_contract` 键。
+- [ ] `inventory` 覆盖输入中的全部资料文件；sidecar/case.json 在 `auxiliary`。
+- [ ] 每条分类都有 `evidence`；低置信度在 `confidence` 标出。
+- [ ] 缺失元数据为 `null`，并在 `unknown_fields`/`uncertainty` 说明，无编造。
+- [ ] 重复组 keeper 与成员正确；预印本/正式版组关系为 `preprint_vs_formal`。
+- [ ] dry-run 前后输入文件哈希与 mtime 完全一致。
+- [ ] `--apply` 后每个 `target` 存在、`source` 不存在；`rollback.json` 可反向恢复。
+- [ ] 第二次 `--apply` 为 `noop`。
+- [ ] 空目录/损坏输入退出码 0，`status` 如实为 `insufficient_input`/`partial`。
+- [ ] 无 `__pycache__`、无符号链接、无网络调用。
 
-```bash
-python /skills/weekly-skill/scripts/run_skill.py --case /input/case.json --out /app/output/result.json --work /app/work
-```
+## 给 Agent 的执行说明
 
-示意输入 `{"case_id":"synthetic-demo","output_contract":{"assignments":"array","tags":"array"}}`；示意输出保留 `case_id`、`assignments`、`tags` 与 `status`，无材料时为 `insufficient_input`。该示例仅为接口说明。
+1. **先只读盘点**：不要预先移动或删除任何输入。执行上面的 dry-run 命令。
+2. **读 `result.json`**：确认 `status`、`case_id`、`inventory` 数量，并逐项核对 `classifications[].evidence`、`metadata[].provenance`、`duplicates`、`versions`、`conflicts`、`skipped`。任何 `null` 都表示“未知”，不要补写。
+3. **把 manifest 与文件系统对账**：只读校验，不修改输入。可用：
 
+   ```bash
+   python - <<'PY'
+   import json, os
+   r = json.load(open('/app/output/result.json', encoding='utf-8'))
+   root = r['evidence']['input_root']
+   on_disk = set()
+   for d, _, fs in os.walk(root):
+       for f in fs:
+           on_disk.add(os.path.relpath(os.path.join(d, f), root).replace('\\', '/'))
+   listed = {x['path'] for x in r['inventory']}
+   aux = {x['path'] for x in r.get('auxiliary', [])}
+   print('missing_from_inventory', sorted(on_disk - listed - aux))
+   print('listed_but_absent', sorted(listed - on_disk))
+   print('duplicate_groups', len(r['duplicates']), 'version_groups', len(r['versions']))
+   print('unknown_metadata_files', [m['file'] for m in r['metadata'] if m['unknown_fields']])
+   PY
+   ```
 
-## 交付保证与评分对齐
-
-调用顺序（固定）：
-
-1. 先运行包内脚本（若存在）：`python scripts/run_skill.py`（默认读 `/input/case.json`，写 `/app/output/result.json`）；路径不同时用 `--case` / `--output` 指定。
-2. 再完成脚本无法自动完成的实质工作（译文、论述、图表、修订、结论等），把结果写回 `result.json` 对应字段。
-3. 最后自检：`case_id` 与输入一致；`output_contract` 每个字段都存在；`status` 按契约取 `success`/`partial`/`insufficient_input`/`failed`（缺输入或证据不足时用 `insufficient_input`/`partial`）；无 `pending` 占位；数字、引用、来源可逐条回溯。
-
-运行保证：
-
-- 输入缺失、JSON 损坏、字段异常、输出目录不存在时，仍须写出结构化 `result.json` 并正常结束，不得崩溃或非零退出。
-- 不联网、不伪造数据、不声称平台评分或官方案例结果。
-- 交付物必须是可直接编辑与复核的成品，而不是流程说明。
-
-评分对齐（本题五个维度）：
-
-- 实际效果（40）：完整产出任务要求的最终成品，覆盖全部输入条目，可直接进入修改流程。
-- 使用增益（25）：体现相对基础 Agent 的可验证改进（结构化、术语/数字/引用核对、可编辑性）。
-- 创新增益（15）：保留方法学增量（分块、对齐、二次校验、版本比对等），并用结果证明其价值。
-- 可靠体验（10）：异常输入有明确降级与说明，不同长度/文体/重复运行下稳定产出。
-- 生态贡献（10）：用途、调用、输入输出、限制、示例、维护信息齐全，资源可被他人复用。
-
-## 最终交付强制要求
-
-1. **调用 Agent 必须交付成品，不是流程说明**：脚本产出只是索引、核对或规格骨架；调用 Agent 必须在同一 `result.json` 中补齐本题要求的最终产物（正文/译文/审稿意见/综述/分析结论/图表源文件与导出件/幻灯片页内容与讲稿/实验方案等）。交付字段为空、只有标题骨架，或含 `pending`、`TODO` 之类占位，一律视为未完成。
-2. **必须覆盖全部输入条目**：输入中的每个章节、问题、文献、图、页面、指标都要有对应条目，不得只处理示例或首条；确实缺失的条目写入 `uncertainty` / `limitations` 并说明原因，不得静默跳过。
-3. **必须自检后再交付**：`case_id` 与输入一致；`output_contract` 每个字段都存在；状态值取本题契约规定的枚举；数字、单位、引用、来源可逐条回溯；结果内部无自相矛盾。
-4. **参数等价**：`python scripts/run_skill.py --case <输入> --out <输出>` 与 `--output <输出>` 等价；默认 `/input/case.json` → `/app/output/result.json`。
-5. **平台用 3 个固定案例分别运行**：逻辑要由输入驱动，不针对某一份示例硬编码；字段命名差异走别名匹配与显式降级，并在 `uncertainty` 记录假设。
+   预期：`missing_from_inventory` 与 `listed_but_absent` 均为空；sidecar/case.json 允许在 `auxiliary`。
+4. **仅在明确授权时 apply**：先保留 dry-run 的 `result.json`，再执行 `--apply`。执行后核对每个 `renames[].target` 是否存在、`source` 是否已让位，并检查 `applied.failures` 为空、`rollback_plan` 完整。
+5. **写 `/app/output/run-review.md`**，至少包含：
+   - 结论与 `status`、`case_id`、文件总数/字节数；
+   - 分类依据表：文件 → 类型 → 置信度 → 关键证据；
+   - 元数据缺口：哪些字段为 `null`、来源是什么、为何不补；
+   - 重复与版本：组键、keeper、被归档成员；
+   - 冲突与跳过：原因与“未覆盖/未删除”的处理；
+   - 可逆性：`rollback.json` 路径、回滚条目数、dry-run/apply 模式；
+   - 未决问题与不确定性（直接引用 `uncertainty`，不要自行“修复”事实）。
+6. **报告口径**：明确区分“已执行”和“仅计划”；不要把 `plan_actions` 说成已完成；不要声称做了 OCR 或联网核验。
