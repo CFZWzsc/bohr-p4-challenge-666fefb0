@@ -1,0 +1,150 @@
+{
+  "schema_version": "1.0",
+  "rules_version": "2026-11-24.r1",
+  "limits": {
+    "max_files": 5000,
+    "max_file_bytes": 268435456,
+    "max_text_bytes": 1048576,
+    "max_filename_bytes": 180,
+    "max_title_chars": 90,
+    "hash_chunk_bytes": 1048576,
+    "max_uncertainty_entries": 120
+  },
+  "naming": {
+    "template": "{first_author}-{year}-{title}",
+    "unknown_author": "anon",
+    "unknown_year": "nd",
+    "unknown_title": "untitled",
+    "unknown_journal": "unknown-journal",
+    "unknown_doi": "no-doi",
+    "hash_suffix_length": 8,
+    "reserved_windows_names": [
+      "CON", "PRN", "AUX", "NUL",
+      "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+      "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+    ]
+  },
+  "hierarchy": {
+    "root": "library",
+    "levels": ["{document_type}", "{year}"],
+    "unknown_year": "unknown-year",
+    "archive_duplicates": "library/archive/duplicates",
+    "archive_versions": "library/archive/versions"
+  },
+  "document_types": [
+    "journal_article",
+    "review",
+    "preprint",
+    "conference_paper",
+    "thesis",
+    "supplement",
+    "dataset",
+    "scan",
+    "unclassified"
+  ],
+  "document_type_aliases": {
+    "article": "journal_article",
+    "journal": "journal_article",
+    "journal article": "journal_article",
+    "journal_article": "journal_article",
+    "期刊论文": "journal_article",
+    "paper": "journal_article",
+    "review": "review",
+    "survey": "review",
+    "综述": "review",
+    "preprint": "preprint",
+    "预印本": "preprint",
+    "conference": "conference_paper",
+    "conference paper": "conference_paper",
+    "conference_paper": "conference_paper",
+    "proceedings": "conference_paper",
+    "会议论文": "conference_paper",
+    "thesis": "thesis",
+    "dissertation": "thesis",
+    "学位论文": "thesis",
+    "博士论文": "thesis",
+    "硕士论文": "thesis",
+    "supplement": "supplement",
+    "supplementary": "supplement",
+    "supplementary information": "supplement",
+    "supporting information": "supplement",
+    "补充材料": "supplement",
+    "附录": "supplement",
+    "dataset": "dataset",
+    "data set": "dataset",
+    "数据集": "dataset",
+    "scan": "scan",
+    "scanned": "scan",
+    "扫描件": "scan",
+    "unclassified": "unclassified",
+    "unknown": "unclassified"
+  },
+  "sidecar_suffixes": [".meta.json", ".metadata.json", ".sidecar.json", ".case.json", ".json"],
+  "exclude_dir_names": [
+    ".git", ".svn", "__pycache__", "node_modules", ".venv", "venv", ".cache",
+    ".idea", ".vscode", ".pytest_cache", ".mypy_cache"
+  ],
+  "exclude_file_names": [
+    "case.json", "task.md", "README.md", "GITHUB_URL.txt",
+    ".DS_Store", "Thumbs.db", "desktop.ini"
+  ],
+  "doi_preprint_prefixes": [
+    "10.1101/", "10.21203/", "10.20944/", "10.48550/", "10.31219/",
+    "10.26434/", "10.22541/", "10.36227/"
+  ],
+  "preprint_venues": ["biorxiv", "medrxiv", "arxiv", "ssrn", "research square", "preprints.org", "chemrxiv"],
+  "formal_types": ["journal_article", "conference_paper", "review", "thesis"],
+  "preprint_markers": [
+    "preprint", "pre-print", "biorxiv", "medrxiv", "arxiv", "ssrn",
+    "research square", "preprints.org", "chemrxiv", "预印本"
+  ],
+  "conference_markers": [
+    "conference", "proceedings", "symposium", "workshop", "meeting paper",
+    "会议", "论文集", "学术会议"
+  ],
+  "thesis_markers": [
+    "thesis", "dissertation", "doctoral", "phd", "master thesis",
+    "学位论文", "博士论文", "硕士论文"
+  ],
+  "supplement_markers": [
+    "supplement", "supplementary", "supporting information", "supporting material",
+    "appendix", "补充材料", "补充信息", "附录"
+  ],
+  "dataset_markers": [
+    "dataset", "data set", "zenodo", "figshare", "dryad", "dataverse",
+    "数据集", "数据包"
+  ],
+  "review_markers": ["review", "survey", "meta-analysis", "综述", "回顾"],
+  "scan_extensions": [".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp"],
+  "text_extensions": [
+    ".txt", ".md", ".rst", ".csv", ".tsv", ".json", ".xml", ".html", ".htm",
+    ".tex", ".bib", ".yaml", ".yml", ".log"
+  ],
+  "revision_markers": [
+    "revision", "revised", "accepted manuscript", "accepted version", "proof",
+    "corrected", "erratum", "v2", "v3", "rev2", "修订", "修正版", "校样"
+  ],
+  "formal_markers": ["published", "formal version", "version of record", "journal version", "正式版"],
+  "author_stopwords": [
+    "journal", "article", "paper", "document", "scan", "scanned", "supplement",
+    "supplementary", "preprint", "thesis", "copy", "final", "draft", "version",
+    "rev", "revision", "untitled", "file", "new", "old"
+  ],
+  "generic_titles": [
+    "journal article", "article", "paper", "document", "scan", "supplement",
+    "supplementary", "preprint", "thesis", "untitled", "file"
+  ],
+  "core_metadata_fields": ["title", "authors", "year", "journal", "doi"],
+  "case_metadata_keys": ["metadata", "documents", "files_metadata", "items", "file_metadata"],
+  "case_root_keys": [
+    "input_dir", "input_root", "materials_dir", "materials", "materials_path",
+    "data_dir", "corpus_dir", "directory", "path", "root", "files"
+  ],
+  "known_venues": [
+    "Nature", "Science", "Cell", "Nature Nanotechnology", "Nature Materials",
+    "Nature Communications", "Physical Review Letters", "Physical Review B",
+    "Journal of the American Chemical Society", "Angewandte Chemie",
+    "Advanced Materials", "IEEE Transactions", "ACM Transactions", "PLOS ONE",
+    "eLife", "PNAS", "bioRxiv", "medRxiv", "arXiv"
+  ]
+}
