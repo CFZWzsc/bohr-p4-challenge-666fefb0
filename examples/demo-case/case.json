@@ -1,0 +1,34 @@
+{
+  "case_id": "demo-case-666fefb0",
+  "description": "Synthetic demo for the research-library organizer. Not an official case result.",
+  "naming_template": "{first_author}-{year}-{title}",
+  "taxonomy": [
+    "journal_article",
+    "preprint",
+    "thesis",
+    "supplement",
+    "scan",
+    "unclassified"
+  ],
+  "metadata": {
+    "inbox/supplement-S1.pdf": {
+      "title": "Supplementary Information for Deep Learning for Materials Discovery",
+      "year": 2023,
+      "type": "supplement"
+    }
+  },
+  "output_contract": {
+    "files": "array of inventory records",
+    "items": "alias of files",
+    "categories": "array of classifications",
+    "labels": "alias of categories",
+    "moves": "array of source-to-target renames",
+    "dupes": "array of identical-content groups",
+    "versions": "array of version groups",
+    "conflicts": "array of conflicts",
+    "skips": "array of skipped items",
+    "metadata": "array of metadata records with provenance",
+    "summary": "string",
+    "state": "object with inventory statistics"
+  }
+}
