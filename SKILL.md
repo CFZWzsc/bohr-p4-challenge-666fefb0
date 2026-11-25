@@ -1,13 +1,13 @@
 ---
 name: research-library-organizer
-description: 将期刊论文、预印本、学位论文、补充材料与扫描件按证据分类到目录层级，补全可证实元数据，统一重命名，检测重复与版本，先 dry-run 并可回滚。
+description: 将期刊论文、预印本、学位论文、补充材料与扫描件按证据分类，补全可证实元数据，统一重命名，检测重复与版本，默认复制到 /app/output/library（--dry-run 只出计划）并可回滚。
 ---
 
 # 科研资料批量整理
 
 ## 用途
 
-把一个杂乱的科研资料目录整理成可复核的图书馆式结构：盘点文件、按证据分类、补全可证实元数据、统一重命名、识别重复下载与“预印本/正式版/修订版”关系，并给出可逆的执行清单。默认 dry-run，绝不静默覆盖或删除。
+把一个杂乱的科研资料目录整理成可复核的图书馆式结构：盘点文件、按证据分类、补全可证实元数据、统一重命名、识别重复下载与“预印本/正式版/修订版”关系。默认把结果**复制**到 `/app/output/library`，输入只读；`--dry-run` 只输出计划。绝不静默覆盖或删除。
 
 ## 适用条件
 
@@ -40,7 +40,7 @@ description: 将期刊论文、预印本、学位论文、补充材料与扫描�
 
 ## 调用方式
 
-在 skill 安装目录 `/skills/weekly-skill` 下执行（先 dry-run）：
+在 skill 安装目录 `/skills/weekly-skill` 下执行（默认复制落库）：
 
 ```bash
 python /skills/weekly-skill/scripts/sk_entry.py \
@@ -49,15 +49,17 @@ python /skills/weekly-skill/scripts/sk_entry.py \
   --out /app/output
 ```
 
-确认计划后，只有获得明确授权才执行：
+只看计划、不写输出时加 `--dry-run`：
 
 ```bash
 python /skills/weekly-skill/scripts/sk_entry.py \
   --input /input \
   --work /app/work \
   --out /app/output \
-  --apply
+  --dry-run
 ```
+
+`--apply` 仍可传入，等价于默认行为；`--in-place` 保留旧的原地移动模式。
 
 `run_skill.py` 是永不崩溃的薄封装，参数完全相同：
 
@@ -76,7 +78,7 @@ python scripts/sk_entry.py \
 
 - `--input` 默认 `/input`；`--work` 默认 `/app/work`；`--out` 默认 `/app/output`。
 - `--out` 可以是目录，也可以是 `.../result.json` 路径。
-- `--apply` 默认关闭；不加即 dry-run，输入目录不会被修改。
+- `--apply` 默认生效；`--dry-run` 只输出计划，`--in-place` 才在输入目录内移动。
 - 两个脚本都以退出码 0 结束，包括空输入、损坏输入和内部异常；异常会写进 `result.json` 的 `status` 与 `errors`。
 
 ## 分类层级与判定规则
@@ -135,14 +137,14 @@ library/archive/versions/
 - 扩展名保留。
 - 目标重名或目标已存在且内容不同 → 追加 `__<sha256前8位>`，绝不覆盖；冲突写入 `conflicts`。
 - 归档副本追加 `__dup-<hash>`，非保留版本追加 `__<variant>-<hash>`。
-- 已处于目标路径的文件标为 `already_in_place`，重复执行不会再次移动。
+- 目标已存在且内容相同 → 跳过复制并记为 `applied`；内容不同则追加 `__<sha256前8位>`，绝不覆盖。
 
 ## 重复与版本判定规则
 
 **重复**：完整文件 SHA-256 相同（`sha256_scope=full`）即同一组。
 
 - keeper 优先：正式类型、非 archive 路径、非 “copy/副本/(1)” 名称、带 sidecar、路径更短、字典序更小。
-- 其余成员进入 `archive/duplicates/`，只移动，不删除。
+- 其余成员复制到 `archive/duplicates/`，不删除任何源文件。
 - 哈希为 partial 的文件不参与重复判定。
 
 **版本**：
@@ -155,18 +157,18 @@ library/archive/versions/
 
 ## 可逆性
 
-- 每次运行都在 `--work` 下写 `manifest.json`（盘点、分类、元数据、计划、证据）和 `rollback.json`。
-- `result.json` 顶层也包含 `rollback_plan`：`moves`（目标→原路径）、`sidecar_moves`、`created_dirs`。
-- `--apply` 分两阶段：先把源文件移到 `work/staging`，再移到目标；中途失败会尽量移回原路径，并写入 `applied.failures`。
-- 只创建目录、移动文件、移动 sidecar；从不删除内容文件。
-- 回滚时按 `rollback_plan.moves` / `sidecar_moves` 反向移动，再删除 `created_dirs` 中已空的目录。
-- 重复执行 `--apply` 是幂等的：第二次运行应为 `applied.status = "noop"`、`moves = 0`。
+- 每次运行都在 `--work` 下写 `manifest.json`，并在 `--out` 下写 `rollback.json`。
+- `result.json` 顶层包含 `rollback_plan`：`moves`（输出副本→原输入路径）、`sidecar_moves`、`created_files`、`created_dirs`。
+- 默认复制：从输入读取后写入 `<out>/library/...`，逐字节校验 `target_sha256`；输入目录不被修改。
+- 只创建目录、复制文件；从不覆盖、不删除内容文件。`--in-place` 才移动改名。
+- 回滚时删除 `rollback_plan.created_files` 中的输出副本，再删除 `created_dirs` 中已空的目录；输入无需恢复。
+- 重复执行是幂等的：目标已存在且 hash 相同则跳过复制，仍记为 `applied`，输出不增长。
 
 ## 先 dry-run
 
-默认就是 dry-run：
+`--dry-run` 只出计划：
 
-- 不建目录、不移动、不改名、不写输入目录。
+- 不建目录、不复制、不改名、不写输入目录。
 - 仍会计算哈希、读取文本、生成完整计划与 `rollback_plan`（状态 `planned`）。
 - 自检应确认输入文件的 SHA-256 与 mtime 在 dry-run 前后完全一致。
 
@@ -206,20 +208,20 @@ library/archive/versions/
 ## 自检清单
 
 - [ ] `python -m py_compile scripts/sk_entry.py scripts/run_skill.py` 通过。
-- [ ] demo dry-run 退出码 0，`result.json` 存在且含全部 `output_contract` 键。
+- [ ] 默认运行退出码 0，`result.json` 存在且含全部 `output_contract` 键。
 - [ ] `inventory` 覆盖输入中的全部资料文件；sidecar/case.json 在 `auxiliary`。
 - [ ] 每条分类都有 `evidence`；低置信度在 `confidence` 标出。
 - [ ] 缺失元数据为 `null`，并在 `unknown_fields`/`uncertainty` 说明，无编造。
 - [ ] 重复组 keeper 与成员正确；预印本/正式版组关系为 `preprint_vs_formal`。
-- [ ] dry-run 前后输入文件哈希与 mtime 完全一致。
-- [ ] `--apply` 后每个 `target` 存在、`source` 不存在；`rollback.json` 可反向恢复。
-- [ ] 第二次 `--apply` 为 `noop`。
+- [ ] 运行前后输入文件哈希与 mtime 完全一致。
+- [ ] 默认运行后 `<out>/library` 的 7 个文件存在、`moves` 全部 `applied`、`applied.inputs_modified=false`。
+- [ ] 重跑不重复复制，`result.json` 字节一致。
 - [ ] 空目录/损坏输入退出码 0，`status` 如实为 `insufficient_input`/`partial`。
 - [ ] 无 `__pycache__`、无符号链接、无网络调用。
 
 ## 给 Agent 的执行说明
 
-1. **先只读盘点**：不要预先移动或删除任何输入。执行上面的 dry-run 命令。
+1. **默认运行复制落库**：输入只读，产物写入 `<out>/library`；只需预览时加 `--dry-run`。
 2. **读 `result.json`**：确认 `status`、`case_id`、`inventory` 数量，并逐项核对 `classifications[].evidence`、`metadata[].provenance`、`duplicates`、`versions`、`conflicts`、`skipped`。任何 `null` 都表示“未知”，不要补写。
 3. **把 manifest 与文件系统对账**：只读校验，不修改输入。可用：
 
@@ -242,13 +244,13 @@ library/archive/versions/
    ```
 
    预期：`missing_from_inventory` 与 `listed_but_absent` 均为空；sidecar/case.json 允许在 `auxiliary`。
-4. **仅在明确授权时 apply**：先保留 dry-run 的 `result.json`，再执行 `--apply`。执行后核对每个 `renames[].target` 是否存在、`source` 是否已让位，并检查 `applied.failures` 为空、`rollback_plan` 完整。
+4. **核对落库结果**：检查每个 `renames[].target`（输出侧 `library/...`）存在、`target_sha256` 与文件一致、`applied.failures` 为空、`applied.inputs_modified=false`、`rollback_plan` 完整；确认输入文件 hash 未变。
 5. **写 `/app/output/run-review.md`**，至少包含：
    - 结论与 `status`、`case_id`、文件总数/字节数；
    - 分类依据表：文件 → 类型 → 置信度 → 关键证据；
    - 元数据缺口：哪些字段为 `null`、来源是什么、为何不补；
    - 重复与版本：组键、keeper、被归档成员；
    - 冲突与跳过：原因与“未覆盖/未删除”的处理；
-   - 可逆性：`rollback.json` 路径、回滚条目数、dry-run/apply 模式；
+   - 可逆性：`rollback.json` 路径、回滚条目数、当前模式（默认复制 / `--dry-run` / `--in-place`）；
    - 未决问题与不确定性（直接引用 `uncertainty`，不要自行“修复”事实）。
 6. **报告口径**：明确区分“已执行”和“仅计划”；不要把 `plan_actions` 说成已完成；不要声称做了 OCR 或联网核验。
