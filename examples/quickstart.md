@@ -1,6 +1,6 @@
 # Quickstart
 
-## 1. 只读 dry-run
+## 1. 默认复制落库
 
 ```bash
 cd /skills/weekly-skill
@@ -10,7 +10,7 @@ python scripts/sk_entry.py \
   --out /app/output
 ```
 
-退出码应为 `0`，生成 `/app/output/result.json` 与 `/app/work/manifest.json`、`/app/work/rollback.json`。dry-run 不会改动 `examples/demo-case`。
+退出码应为 `0`，生成 `/app/output/result.json`、`/app/output/rollback.json` 与 `library/` 下的输出副本，同时写 `/app/work/manifest.json`。默认不修改 `examples/demo-case`；只需计划时加 `--dry-run`。
 
 ## 2. 检查结果
 
@@ -39,7 +39,7 @@ demo 的预期特征：
 - 1 组重复（`journal-article-2023.pdf` 与 `copy-of-journal-article-2023.pdf`，SHA-256 相同）；
 - 1 组版本（`smith-2020-graphene-preprint.pdf` 与 `smith-2020-graphene-formal.pdf`，`preprint_vs_formal`）；
 - 1 条跳过：扫描件无文本层；
-- 0 冲突；7 条计划改名/移动；
+- 1 条冲突（`copy-of-journal-article-2023.pdf` 与 `journal-article-2023.pdf` 同为重复下载，后者归档为副本，不删除）；7 条输出副本计划；
 - `status=partial`（存在未知元数据与扫描件，如实报告，不是失败）；
 - `metadata` 中 thesis 的 `journal`、`doi` 为 `null`；scan 的 `authors`、`journal`、`doi` 为 `null`。
 
@@ -57,58 +57,53 @@ print('contract OK', r['contract_coverage'])
 PY
 ```
 
-## 3. 在副本上演示 apply
+## 3. 默认复制与重跑
 
-不要直接对 `examples/demo-case` 做 apply；先复制：
+直接对 `examples/demo-case` 运行即可，源文件不会被移动：
 
 ```bash
-cp -r examples/demo-case /tmp/demo-apply
 python scripts/sk_entry.py \
-  --input /tmp/demo-apply \
+  --input examples/demo-case \
   --work /tmp/demo-work \
-  --out /tmp/demo-out \
-  --apply
+  --out /tmp/demo-out
 ```
 
 预期：
 
-- `applied.status = "applied"`，`moves = 7`；
-- `library/journal_article/2023/...pdf` 等目标存在；
-- 原 `inbox/*.pdf` 不再存在（已移动，不是删除）；
-- `rollback.json` 含 7 条 move、3 条 sidecar move、若干 `created_dirs`。
+- `applied.status = "applied"`，`moves = 7`，`inputs_modified = false`，`source_mutation = "none"`；
+- `applied.library_root = "library"`，7 个文件位于 `/tmp/demo-out/library/<type>/<year>/`；
+- `moves[].target` 为输出侧相对路径且带 `target_sha256`；
+- `inbox/*.pdf` 原样保留，哈希不变；`rollback.json` 的 `created_files` 指向输出副本。
 
 再次执行同一命令应为幂等：
 
 ```bash
-python scripts/sk_entry.py --input /tmp/demo-apply --work /tmp/demo-work2 --out /tmp/demo-out2 --apply
-# applied.status == "noop", moves == 0
+python scripts/sk_entry.py --input examples/demo-case --work /tmp/demo-work --out /tmp/demo-out
+# 输出文件数不增长，result.json 与首次逐字节一致
 ```
 
 ## 4. 回滚
 
-按 `/tmp/demo-work/rollback.json` 的 `moves` 反向移动即可；参考：
+删除 `rollback.json` 的 `created_files` 中列出的输出副本，再移除为空的 `created_dirs` 即可：
 
 ```bash
 python - <<'PY'
-import json, os
+import json
 from pathlib import Path
-root = Path('/tmp/demo-apply')
-rb = json.load(open('/tmp/demo-work/rollback.json', encoding='utf-8'))
-for m in rb['moves'] + rb['sidecar_moves']:
-    src, dst = root / m['from'], root / m['to']
-    if src.exists():
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(src, dst)
-for d in sorted(rb['created_dirs'], key=len, reverse=True):
+out = Path('/tmp/demo-out')
+rb = json.load(open(out / 'rollback.json', encoding='utf-8'))
+for rel in rb['created_files']:
+    (out / rel).unlink(missing_ok=True)
+for rel in sorted(rb['created_dirs'], key=len, reverse=True):
     try:
-        (root / d).rmdir()
+        (out / rel).rmdir()
     except OSError:
         pass
 print('rolled back')
 PY
 ```
 
-回滚后文件路径与内容应与原始 demo 一致（哈希可核对）。
+回滚只影响输出目录；输入 demo 文件从未被修改。
 
 ## 5. 接入真实 case
 
