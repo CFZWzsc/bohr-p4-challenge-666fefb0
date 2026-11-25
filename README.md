@@ -9,7 +9,7 @@ answers, private data or credentials are included.
 ## Skill
 
 - Name: `research-library-organizer`
-- Summary: 将期刊论文、预印本、学位论文、补充材料与扫描件按证据分类到目录层级，补全可证实元数据，统一重命名，检测重复与版本，先 dry-run 并可回滚。
+- Summary: 将期刊论文、预印本、学位论文、补充材料与扫描件按证据分类，补全可证实元数据，统一重命名，检测重复与版本，默认复制到 /app/output/library（--dry-run 只出计划）并可回滚。
 
 ## Contents
 
