@@ -1375,7 +1375,7 @@ def sidecar_suffix_for(path):
     return ".json"
 
 
-def plan_renames(records, duplicate_roles, version_roles, case, policy, input_root):
+def plan_renames(records, duplicate_roles, version_roles, case, policy, disk_base=None):
     renames, conflicts = [], []
     archive_duplicates = policy.get("hierarchy", {}).get("archive_duplicates", "library/archive/duplicates")
     archive_versions = policy.get("hierarchy", {}).get("archive_versions", "library/archive/versions")
@@ -1402,6 +1402,14 @@ def plan_renames(records, duplicate_roles, version_roles, case, policy, input_ro
             action = "archive_duplicate"
         elif role == "archived":
             action = "archive_version"
+        if role == "duplicate":
+            conflicts.append({
+                "file": record["file"],
+                "kind": "duplicate_download",
+                "detail": "identical sha256 %s to the keeper of the same group" % (
+                    role_info.get("group") or record.get("sha256") or "unknown"),
+                "resolution": "archived copy placed at %s; keeper kept; no source file deleted" % target,
+            })
         status = "planned"
         reason = "%s; role=%s; template=%s" % (
             classification.get("basis"), role,
@@ -1425,6 +1433,7 @@ def plan_renames(records, duplicate_roles, version_roles, case, policy, input_ro
             "action": action,
             "reason": reason,
             "sha256": record.get("sha256"),
+            "target_sha256": record.get("sha256"),
             "role": role,
             "variant": variant,
             "status": status,
@@ -1457,10 +1466,11 @@ def plan_renames(records, duplicate_roles, version_roles, case, policy, input_ro
             target = candidate
         used[target] = entry["source"]
 
-    # Resolve collisions with files already on disk.
-    base = Path(input_root)
+    # Resolve collisions with files already on disk. Only the legacy in-place mode
+    # depends on disk state; copy mode plans deterministically so re-runs are identical.
     moving_sources = {r["source"] for r in renames if r["status"] == "planned" and r["action"] in MOVE_ACTIONS}
-    for entry in renames:
+    base = Path(disk_base) if disk_base is not None else None
+    for entry in (renames if base is not None else []):
         if entry["status"] != "planned" or entry["action"] not in MOVE_ACTIONS:
             continue
         target_abs = base / entry["target"]
@@ -1562,28 +1572,127 @@ def plan_actions(renames, input_root, work_dir):
     return ordered
 
 
-def rollback_plan(renames, mode, created_dirs=None):
+def apply_copy_plan(renames, input_root, out_dir, policy):
+    """Copy every planned file into <out>/library/<type>/<year>/ without touching inputs."""
+    base = Path(input_root)
+    library_root = policy.get("hierarchy", {}).get("root", "library")
+    out_base = Path(out_dir)
+    created_files, applied_moves, failures = [], [], []
+    for entry in sorted(renames, key=lambda r: r["source"]):
+        if entry["status"] != "planned" or entry["action"] not in MOVE_ACTIONS:
+            continue
+        source_abs = base / entry["source"]
+        target_rel = entry["target"]
+        target_abs = out_base / target_rel
+        if not source_abs.exists():
+            entry["status"] = "apply_failed"
+            failures.append({"file": entry["source"], "reason": "source disappeared before copy"})
+            continue
+        if target_abs.exists():
+            existing_sha, _, scope, _ = sha256_file(target_abs, policy)
+            if scope == "full" and existing_sha == entry["sha256"]:
+                # Idempotent re-run: identical output copy already in place.
+                entry["status"] = "applied"
+                entry["target_sha256"] = existing_sha
+                applied_moves.append(entry)
+                created_files.append(target_rel)
+                continue
+            entry["status"] = "apply_failed"
+            failures.append({"file": entry["source"],
+                             "reason": "target exists with different content; not overwritten"})
+            continue
+        try:
+            target_abs.parent.mkdir(parents=True, exist_ok=True)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+            fd = os.open(str(target_abs), flags, 0o644)
+            try:
+                with os.fdopen(fd, "wb") as out_handle, open(str(source_abs), "rb") as in_handle:
+                    shutil.copyfileobj(in_handle, out_handle, 1048576)
+            except BaseException:
+                try:
+                    os.unlink(str(target_abs))
+                except OSError:
+                    pass
+                raise
+            digest, _, scope, hash_error = sha256_file(target_abs, policy)
+            if hash_error or scope != "full" or digest != entry["sha256"]:
+                try:
+                    os.unlink(str(target_abs))
+                except OSError:
+                    pass
+                raise OSError("sha256 verification failed: %s" % (hash_error or "digest_mismatch"))
+            entry["status"] = "applied"
+            entry["target_sha256"] = digest
+            applied_moves.append(entry)
+            created_files.append(target_rel)
+        except OSError as exc:
+            entry["status"] = "apply_failed"
+            failures.append({"file": entry["source"], "reason": "copy failed: %s" % exc})
+
+    created_dirs = set()
+    for rel in created_files:
+        parts = rel.split("/")
+        for index in range(1, len(parts)):
+            created_dirs.add("/".join(parts[:index]))
+    if failures:
+        status = "partial"
+    elif applied_moves:
+        status = "applied"
+    else:
+        status = "noop"
+    return {
+        "mode": "apply",
+        "status": status,
+        "library_root": library_root,
+        "moves": len(applied_moves),
+        "created_files": sorted(set(created_files)),
+        "created_dirs": sorted(created_dirs),
+        "failures": failures,
+        "inputs_modified": False,
+        "source_mutation": "none",
+    }
+
+
+def rollback_plan(renames, mode, created_dirs=None, created_files=None, library_root=None,
+                  in_place=False):
     moves, sidecars = [], []
     for entry in renames:
         if entry["status"] not in ("planned", "applied"):
             continue
         if entry["action"] not in MOVE_ACTIONS:
             continue
-        moves.append({"from": entry["target"], "to": entry["source"], "sha256": entry["sha256"]})
+        move = {"from": entry["target"], "to": entry["source"], "sha256": entry["sha256"]}
+        if entry.get("target_sha256"):
+            move["target_sha256"] = entry["target_sha256"]
+        moves.append(move)
         if entry.get("sidecar") and entry.get("sidecar_target"):
             sidecars.append({"from": entry["sidecar_target"], "to": entry["sidecar"]})
-    return {
-        "mode": mode,
-        "status": "recorded" if mode == "apply" else "planned",
-        "moves": sorted(moves, key=lambda m: m["to"]),
-        "sidecar_moves": sorted(sidecars, key=lambda m: m["to"]),
-        "created_dirs": sorted(created_dirs or []),
-        "instructions": [
+    if in_place:
+        instructions = [
             "Move each 'from' back to 'to' in reverse order.",
             "Move each sidecar 'from' back to 'to'.",
             "Remove only directories listed in created_dirs if empty.",
             "No file is deleted by this skill; rollback restores original paths.",
-        ],
+        ]
+        inputs_modified = mode == "apply"
+    else:
+        instructions = [
+            "Delete every file listed in created_files; they are copies under <out>/library.",
+            "Remove only directories listed in created_dirs, and only when empty.",
+            "Input files are read-only: nothing under the input directory was moved, renamed or deleted.",
+        ]
+        inputs_modified = False
+    return {
+        "mode": mode,
+        "status": "recorded" if mode == "apply" else "planned",
+        "library_root": library_root,
+        "moves": sorted(moves, key=lambda m: m["to"]),
+        "sidecar_moves": sorted(sidecars, key=lambda m: m["to"]),
+        "created_files": sorted(created_files or []),
+        "created_dirs": sorted(created_dirs or []),
+        "inputs_modified": inputs_modified,
+        "source_mutation": "none",
+        "instructions": instructions,
     }
 
 
@@ -1727,26 +1836,40 @@ def run(args):
 
     duplicate_groups_list, duplicate_roles = duplicate_groups(records, policy)
     version_groups_list, version_roles = detect_versions(records, duplicate_roles, policy)
-    renames, conflicts = plan_renames(records, duplicate_roles, version_roles, case, policy, root)
+    dry_run = bool(getattr(args, "dry_run", False))
+    in_place = bool(getattr(args, "in_place", False))
+    mode = "dry-run" if dry_run else ("in-place" if in_place else "apply")
+    _out_file, out_dir = resolve_output(getattr(args, "out", "/app/output"))
+    plan_base = root if (in_place and not dry_run) else None
+    renames, conflicts = plan_renames(records, duplicate_roles, version_roles, case, policy,
+                                      disk_base=plan_base)
     actions = plan_actions(renames, root, args.work)
-    preview = rollback_plan(renames, "dry-run")
+    library_root = policy.get("hierarchy", {}).get("root", "library")
 
-    mode = "apply" if args.apply else "dry-run"
-    applied = {
-        "mode": "dry-run",
-        "status": "not_applied",
-        "moves": 0,
-        "created_dirs": [],
-        "failures": [],
-        "inputs_modified": False,
-    }
-    if args.apply:
+    if dry_run:
+        applied = {
+            "mode": "dry-run",
+            "status": "planned",
+            "library_root": library_root,
+            "moves": 0,
+            "created_files": [],
+            "created_dirs": [],
+            "failures": [],
+            "inputs_modified": False,
+            "source_mutation": "none",
+        }
+        rollback = rollback_plan(renames, "dry-run", library_root=library_root)
+    elif in_place:
         applied = apply_plan(renames, root, args.work, policy)
-        rollback = rollback_plan(renames, "apply", applied.get("created_dirs"))
-        for failure in applied.get("failures", []):
-            errors.append("apply failure for %s: %s" % (failure.get("file"), failure.get("reason")))
+        applied["library_root"] = None
+        applied["source_mutation"] = "moved_in_place" if applied.get("moves") else "none"
+        rollback = rollback_plan(renames, "apply", applied.get("created_dirs"), in_place=True)
     else:
-        rollback = preview
+        applied = apply_copy_plan(renames, root, out_dir, policy)
+        rollback = rollback_plan(renames, "apply", applied.get("created_dirs"),
+                                 applied.get("created_files"), library_root=library_root)
+    for failure in applied.get("failures", []):
+        errors.append("apply failure for %s: %s" % (failure.get("file"), failure.get("reason")))
 
     metadata_records = [r["meta"] for r in records]
     classifications = [r["classification"] for r in records]
@@ -1777,11 +1900,11 @@ def run(args):
         "tool": "scripts/sk_entry.py",
         "tool_version": TOOL_VERSION,
         "policy_version": policy.get("rules_version"),
-        "policy_source": policy_source,
+        "policy_source": Path(policy_source).name if policy_source else None,
         "hash_algorithm": "sha256",
         "hash_scope": "full file unless max_file_bytes cap reached",
         "inventory_digest": inventory_digest(inventory),
-        "input_root": str(root),
+        "input_root": Path(root).name or ".",
         "input_root_exists": Path(root).exists(),
         "sidecars_used": used_sidecars,
         "case_metadata_used": sorted(r["file"] for r in records if r.get("case_metadata_used")),
@@ -1789,8 +1912,8 @@ def run(args):
         "metadata_sources": _count_values(p.get("source") for r in metadata_records
                                           if isinstance(r.get("provenance"), dict)
                                           for p in r["provenance"].values()),
-        "source_mutation": "moved according to rollback.json" if args.apply and applied.get("moves")
-                           else "none",
+        "library_root": library_root,
+        "source_mutation": "moved_in_place" if in_place and applied.get("moves") else "none",
         "mode": mode,
         "deterministic": True,
     }
@@ -1841,7 +1964,10 @@ def run(args):
         },
     }
     output["result"] = result["result"]
+    output["mode"] = mode
     _write_work_artifacts(args.work, output)
+    if not dry_run:
+        write_json(Path(out_dir) / "rollback.json", rollback)
     return output
 
 
@@ -2381,7 +2507,11 @@ def parse_args(argv=None):
     parser.add_argument("--out", "--output", dest="out", default="/app/output",
                         help="output directory or result.json path (default /app/output)")
     parser.add_argument("--apply", action="store_true",
-                        help="apply moves/renames; default is dry-run")
+                        help="accepted for compatibility; copying into <out>/library is the default")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="write only the plan; no file is copied or moved")
+    parser.add_argument("--in-place", dest="in_place", action="store_true",
+                        help="legacy mode: move and rename files inside the input directory")
     parser.add_argument("--policy", default=None, help="optional policy.json override")
     parser.add_argument("--version", action="version", version="%(prog)s " + TOOL_VERSION)
     args, _unknown = parser.parse_known_args(argv)
@@ -2396,7 +2526,7 @@ def main(argv=None):
     except Exception as exc:
         emit("ERROR", "argument parsing failed: %s" % exc)
         args = argparse.Namespace(input="/input", work="/app/work", out="/app/output",
-                                  apply=False, policy=None)
+                                          apply=False, dry_run=False, in_place=False, policy=None)
     try:
         output = run(args)
     except Exception as exc:
