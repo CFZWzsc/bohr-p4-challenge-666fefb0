@@ -31,6 +31,7 @@ answers, private data or credentials are included.
 | `examples/demo-case/task.md` |
 | `examples/quickstart.md` |
 | `references/classification-rules.md` |
+| `references/gain-ablation.md` |
 | `references/metadata-and-renaming.md` |
 | `references/reversibility-and-failures.md` |
 | `scripts/run_skill.py` |
